@@ -9,7 +9,9 @@ venv/
 env/
 .env
 
-data/
+# Runtime data are kept out of version control.  Keep the source utilities
+# under scripts/data/ trackable.
+/data/
 results/
 checkpoints/
 logs/

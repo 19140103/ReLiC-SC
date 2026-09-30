@@ -1,4 +1,4 @@
-name: cevr
+name: relic-sc
 channels:
   - pytorch
   - nvidia

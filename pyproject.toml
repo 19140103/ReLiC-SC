@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "rapid-eeg"
+name = "relic-sc"
 version = "0.1.0"
-description = "Repeat-aware probabilistic inference for low-SNR visual EEG decoding"
+description = "ReLiC-SC visual EEG retrieval with response prediction, calibration, and reliability-aware scoring"
 requires-python = ">=3.11,<3.13"
 
 [tool.setuptools]

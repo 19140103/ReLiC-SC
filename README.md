@@ -6,8 +6,11 @@ three parts:
 
 - `encoder/`: the cumulative-window, multi-layer EEG/image representation
   training code used to obtain the branch embeddings;
-- `relic_sc/score.py`: ridge prediction, candidate scoring, leave-one-query-out
-  mean calibration, score normalization, and branch fusion;
+- `relic_sc/score.py`: the compact ridge-prediction and mean-calibration
+  reference scorer;
+- `relic_sc/full_score.py`: the fixed ReLiC-SC scorer used for the paper,
+  including mean/variance calibration, candidate-local residual weighting,
+  visual-layer scores, residual-MSE layer weights, and nested score fusion;
 - `src/rapid_eeg/` and `scripts/data/`: leakage-safe Alljoined metadata and
   data-preparation utilities used by the experiments.
 
@@ -16,7 +19,7 @@ model checkpoints, generated result logs, or credentials.
 
 ## Environment
 
-The reference environment uses Python 3.11, PyTorch 2.6, CUDA 12.6, NumPy,
+The reference environment uses Python 3.12, PyTorch 2.6, CUDA 12.6, NumPy,
 Pandas, and the packages listed in `requirements.txt`. Install the dependencies
 with:
 
@@ -62,9 +65,27 @@ python relic_sc/score.py \
   --out results/relic_sc.csv
 ```
 
-The script reports direct cosine matching, prediction-based ReLiC scoring,
-mean-calibrated ReLiC-SC, shuffled-prediction controls, Top-1/5/10, MRR, mean
-rank, and paired deltas. It also writes summary and alpha-selection CSV files.
+The full scorer additionally requires an image-bank directory containing one
+`level-*` subdirectory per visual layer, with `image_train.npy` and
+`image_test.npy` files aligned to the index fields in each embedding archive:
+
+```bash
+python relic_sc/full_score.py \
+  --embedding-root /path/to/embeddings \
+  --image-bank-root /path/to/ViT-B32-depth-bank-8 \
+  --subjects sub-01 sub-02 \
+  --seeds 20260829 20260830 20260831 \
+  --run-spec G=global_run \
+  --run-spec H=stage_run \
+  --out results/relic_sc_full.csv
+```
+
+The compact script reports direct cosine matching, prediction-based ReLiC
+scoring, mean-calibrated ReLiC-SC, shuffled-prediction controls, Top-1/5/10,
+MRR, mean rank, and paired deltas. It also writes summary and alpha-selection
+CSV files. For the full paper configuration, provide the selected visual-layer
+feature banks and run `relic_sc/full_score.py`; its fixed settings are recorded
+in the module docstring and match the equations in the manuscript.
 
 ## Representation learning
 
@@ -85,6 +106,8 @@ questionnaires, or any other participant-level files to this repository.
 ## License
 
 The code in this repository is released under the MIT License in `LICENSE`.
+The `encoder/cevr` and `src/rapid_eeg` namespaces are retained for compatibility
+with the CEVR-derived encoder components; their provenance is documented in
+the source docstrings and the retained copyright notice.
 This code license does not change the licenses or access terms of THINGS-EEG2,
 Alljoined-1.6M, CLIP, or any other external resource.
-

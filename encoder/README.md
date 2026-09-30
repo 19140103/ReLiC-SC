@@ -24,3 +24,7 @@ python scripts/train_intra_subject.py \
   --output-dir results/encoder
 ```
 
+Each completed run writes `train_test_embeddings.npz`, containing the train
+and test EEG predictions, mapped visual targets, and object/image indices
+consumed by the scoring scripts. A compact test-only `final_embeddings.npz`
+is also written for backward compatibility.

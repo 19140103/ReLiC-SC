@@ -1,4 +1,4 @@
-"""CEVR: EEG-to-Image Retrieval with Cumulative-Window EEG Representations and Multi-Level Visual Features."""
+"""CEVR-compatible cumulative-window encoder used by ReLiC-SC."""
 
 from .model import CEVRModel, MultiLevelVisualProjector, SharedCausalAdditiveEncoder
 

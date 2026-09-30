@@ -1,4 +1,4 @@
-"""Leakage-safe Alljoined-1.6M trial tables for CEVR-derived experiments.
+"""Leakage-safe Alljoined-1.6M trial tables for ReLiC-SC experiments.
 
 This module is intentionally independent from the author's original CEVR
 repository.  It keeps every retained EEG epoch as one observation, reconstructs

@@ -1,4 +1,4 @@
-"""Compact EEGNet retrieval baseline used by the NeuroTriage P1 gate."""
+"""Compact EEG retrieval baselines used by the ReLiC-SC release utilities."""
 
 from __future__ import annotations
 

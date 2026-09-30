@@ -8,7 +8,7 @@ import torch.nn.functional as F
 
 
 class SharedCausalAdditiveEncoder(nn.Module):
-    """Shared cumulative-window encoder used by the CEVR experiments."""
+    """Shared cumulative-window encoder used by the ReLiC-SC experiments."""
 
     def __init__(
         self,

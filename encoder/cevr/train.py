@@ -255,6 +255,8 @@ def train(config: dict[str, Any]) -> dict[str, Any]:
                 flush=True,
             )
 
+    train_pred = predict(model, train_ds, device, batch_size)
+    train_image = visual_projector.encode_numpy(train_visual, device, batch_size)
     pred = predict(model, test_ds, device, batch_size)
     image_embed = visual_projector.encode_numpy(current_test_features, device, batch_size)
     metrics = retrieval_metrics(pred, image_embed)
@@ -279,6 +281,20 @@ def train(config: dict[str, Any]) -> dict[str, Any]:
         current_image=image_embed,
         current_object_idx=test_keys[:, 0],
         current_image_idx=test_keys[:, 1],
+    )
+    # This file is the interchange format consumed by relic_sc/score.py and
+    # relic_sc/full_score.py.  The final_embeddings.npz file above is retained
+    # as a compact test-only artifact for backward compatibility.
+    np.savez_compressed(
+        output_dir / "train_test_embeddings.npz",
+        train_pred=train_pred,
+        train_image=train_image,
+        train_object_idx=train_keys[:, 0],
+        train_image_idx=train_keys[:, 1],
+        test_pred=pred,
+        test_image=image_embed,
+        test_object_idx=test_keys[:, 0],
+        test_image_idx=test_keys[:, 1],
     )
     torch.save(
         {
@@ -319,7 +335,7 @@ def config_from_args(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def build_argparser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Train CEVR for one THINGS-EEG subject.")
+    parser = argparse.ArgumentParser(description="Train the ReLiC-SC encoder for one THINGS-EEG subject.")
     parser.add_argument("--config", required=True, help="Path to a JSON config file.")
     parser.add_argument("--subject", default=None, help="Subject id, e.g. sub-01.")
     parser.add_argument("--run-name", default=None)
