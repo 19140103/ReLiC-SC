@@ -1,0 +1,83 @@
+from __future__ import annotations
+
+from pathlib import Path
+import sys
+
+import torch
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from cevr.model import CEVRModel, MultiLevelVisualProjector
+from cevr.utils import count_parameters
+
+
+WINDOW_ENDS = [25, 50, 75, 100, 125, 150, 200, 250]
+
+
+def build_model(eeg_fusion_mode: str = "mean") -> CEVRModel:
+    return CEVRModel(
+        channels=17,
+        embed_dim=512,
+        window_ends=WINDOW_ENDS,
+        additive_hidden_dim=1024,
+        dropout=0.1,
+        eeg_fusion_mode=eeg_fusion_mode,
+        current_slot_weight=0.0,
+        parameter_matched_heads=True,
+    )
+
+
+def test_shapes() -> None:
+    model = build_model()
+    model.eval()
+    with torch.no_grad():
+        out = model(torch.randn(2, 17, 250))
+    assert out["current"].shape == (2, 512)
+    assert out["window_embeddings"].shape == (2, len(WINDOW_ENDS), 512)
+    assert len(out["window_outputs"]) == len(WINDOW_ENDS)
+
+
+def test_cumulative_window_causality() -> None:
+    model = build_model()
+    model.eval()
+    torch.manual_seed(7)
+    eeg = torch.randn(2, 17, 250)
+    with torch.no_grad():
+        baseline = model(eeg)["window_embeddings"]
+    worst_difference = 0.0
+    for window_idx, end in enumerate(WINDOW_ENDS[:-1]):
+        perturbed = eeg.clone()
+        perturbed[:, :, end:] += 10.0 * torch.randn_like(perturbed[:, :, end:])
+        with torch.no_grad():
+            changed = model(perturbed)["window_embeddings"]
+        diff = float((baseline[:, : window_idx + 1, :] - changed[:, : window_idx + 1, :]).abs().max().item())
+        worst_difference = max(worst_difference, diff)
+    assert worst_difference < 1e-6
+
+
+def test_single_full_window_fusion() -> None:
+    model = build_model(eeg_fusion_mode="last")
+    model.eval()
+    eeg = torch.randn(2, 17, 250)
+    with torch.no_grad():
+        tokens = model.encoder(eeg, WINDOW_ENDS)
+        expected = model.fusion(tokens[:, -1, :])
+        actual = model(eeg)["current"]
+    assert torch.equal(actual, expected)
+    assert model.eeg_component_weights() == [0.0] * 7 + [1.0]
+
+
+def test_paper_parameter_count() -> None:
+    model = build_model()
+    visual = MultiLevelVisualProjector(num_layers=8, parameter_matched_heads=True)
+    counts = count_parameters(model, visual)
+    assert counts["total_params"] == 12499521
+
+
+if __name__ == "__main__":
+    test_shapes()
+    test_cumulative_window_causality()
+    test_single_full_window_fusion()
+    test_paper_parameter_count()
+    print("ok")

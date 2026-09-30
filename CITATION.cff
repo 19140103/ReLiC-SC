@@ -1,0 +1,30 @@
+cff-version: 1.2.0
+title: "ReLiC-SC: Calibrated Response Modeling for Reliable Visual EEG Retrieval"
+message: "If you use this code, please cite the ReLiC-SC manuscript."
+type: software
+authors:
+  - family-names: Wang
+    given-names: Zhongshi
+  - family-names: Chen
+    given-names: Xiaobing
+  - family-names: Shao
+    given-names: Peng
+  - family-names: Xiu
+    given-names: Wei
+  - family-names: Du
+    given-names: Xinwei
+  - family-names: Liu
+    given-names: Ming
+  - family-names: Liu
+    given-names: Xingbo
+  - family-names: Yang
+    given-names: Xu
+  - family-names: Zhang
+    given-names: Yubing
+  - family-names: Wang
+    given-names: Zhanli
+  - family-names: Wang
+    given-names: Zhifei
+version: 0.1.0
+repository-code: "https://github.com/19140103/ReLiC-SC"
+license: MIT

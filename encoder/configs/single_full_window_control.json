@@ -1,0 +1,43 @@
+{
+  "run": {
+    "subject": "sub-01",
+    "run_name": "CEVR_additive1024_single_full_window",
+    "output_dir": "results/cevr_single_full_window_control",
+    "seed": 20260815,
+    "cpu": false,
+    "dry_run": false
+  },
+  "data": {
+    "eeg_data_dir": "data/things_eeg/preprocessed_eeg_npy",
+    "visual_feature_root": "data/things_eeg/image_feature/ViT-B32-multilevel-8",
+    "visual_levels": ["100", "101", "102", "103", "104", "105", "106", "107"],
+    "selected_channels": [
+      "P7", "P5", "P3", "P1", "Pz", "P2", "P4", "P6", "P8",
+      "PO7", "PO3", "POz", "PO4", "PO8", "O1", "Oz", "O2"
+    ],
+    "cache_averaged_eeg": true,
+    "eeg_standardization": "none"
+  },
+  "model": {
+    "window_ends": [25, 50, 75, 100, 125, 150, 200, 250],
+    "eeg_fusion_mode": "last",
+    "additive_hidden_dim": 1024,
+    "embed_dim": 512,
+    "num_heads": 8,
+    "num_slots": 5,
+    "dropout": 0.1,
+    "current_slot_weight": 0.0,
+    "parameter_matched_heads": true
+  },
+  "train": {
+    "epochs": 50,
+    "batch_size": 1024,
+    "lr": 0.0001,
+    "weight_decay": 0.0001,
+    "lr_scheduler": "cosine",
+    "min_lr": 0.000001,
+    "temperature": 0.07,
+    "eval_every": 5,
+    "log_every": 5
+  }
+}
