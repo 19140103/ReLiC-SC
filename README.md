@@ -105,9 +105,4 @@ questionnaires, or any other participant-level files to this repository.
 
 ## License
 
-The code in this repository is released under the MIT License in `LICENSE`.
-The `encoder/cevr` and `src/rapid_eeg` paths are retained for compatibility with
-the CEVR-derived encoder components. Their provenance is documented in the
-source docstrings and the retained copyright notice.
-This code license does not change the licenses or access terms of THINGS-EEG2,
-Alljoined-1.6M, CLIP, or any other external resource.
+The code in this repository is released under the MIT License in LICENSE. The encoder/cevr and src/rapid_eeg paths contain pre-existing encoder components retained for compatibility. Their provenance and applicable copyright information are documented in the source files and LICENSE. This code license does not change the licenses or access terms of THINGS-EEG2, Alljoined-1.6M, CLIP, or any other external resource.
