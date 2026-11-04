@@ -13,6 +13,8 @@ separate from per-query calibration and score fusion:
 
 The defaults are intentionally fixed (rather than tuned by this script) so that
 the command-line entry point reproduces the shared paper configuration.
+Vector normalization uses a 1e-8 norm floor; variance, MSE, and min--max score
+stabilization retain their separate 1e-6 tolerance.
 """
 
 from __future__ import annotations
@@ -35,10 +37,12 @@ LOCAL_SHRINK = 0.5
 LAYER_FEATURE_SHRINK = 0.5
 KAPPA = 0.25
 GAMMA = 0.5
+# Vector normalization has a separate floor from variance and score tolerances.
+NORM_EPS = 1e-8
 EPS = 1e-6
 
 
-def l2_normalize(x: np.ndarray, eps: float = EPS) -> np.ndarray:
+def l2_normalize(x: np.ndarray, eps: float = NORM_EPS) -> np.ndarray:
     """Normalize rows of an embedding matrix, preserving float32 output."""
 
     x = np.asarray(x, dtype=np.float32)
@@ -86,6 +90,8 @@ def loo_variance_calibrate(
     power: float = VARIANCE_POWER,
     clip: float = VARIANCE_CLIP,
     eps: float = EPS,
+    *,
+    norm_eps: float = NORM_EPS,
 ) -> np.ndarray:
     """Align each query's mean and diagonal scale to candidate predictions.
 
@@ -93,6 +99,7 @@ def loo_variance_calibrate(
     estimating its observed mean and variance.  ``power=1`` and ``clip=2`` are
     the fixed paper settings.  For a singleton pool the available observation is
     used directly and its variance is set to zero.
+    ``eps`` stabilizes variances; ``norm_eps`` floors the output vector norm.
     """
 
     query = np.asarray(query, dtype=np.float32)
@@ -119,7 +126,7 @@ def loo_variance_calibrate(
 
     scale = np.sqrt((ref_var + float(eps)) / (q_var + float(eps)))
     scale = np.clip(scale, 1.0 / float(clip), float(clip)) ** float(power)
-    return l2_normalize(ref_mean + (query - q_mean) * scale, eps=eps)
+    return l2_normalize(ref_mean + (query - q_mean) * scale, eps=norm_eps)
 
 
 # A descriptive alias used by callers that do not need to mention the LOO detail.
@@ -131,11 +138,13 @@ def local_indices_by_similarity(
     candidate_features: np.ndarray,
     k: int = LOCAL_K,
     chunk: int = 64,
+    *,
+    norm_eps: float = NORM_EPS,
 ) -> np.ndarray:
     """Return the top-k training neighbours for every candidate."""
 
-    train_features = l2_normalize(train_features)
-    candidate_features = l2_normalize(candidate_features)
+    train_features = l2_normalize(train_features, norm_eps)
+    candidate_features = l2_normalize(candidate_features, norm_eps)
     if train_features.shape[0] == 0:
         raise ValueError("train_features must not be empty")
     k = min(max(1, int(k)), train_features.shape[0])
@@ -158,6 +167,8 @@ def candidate_local_variance(
     k: int = LOCAL_K,
     shrink: float = LOCAL_SHRINK,
     eps: float = EPS,
+    *,
+    norm_eps: float = NORM_EPS,
 ) -> np.ndarray:
     """Estimate candidate-specific diagonal residual variance.
 
@@ -170,7 +181,7 @@ def candidate_local_variance(
         raise ValueError("at least one training residual is required")
     ddof = 1 if residual.shape[0] > 1 else 0
     global_var = residual.var(axis=0, ddof=ddof).astype(np.float32)
-    idx = local_indices_by_similarity(train_features, candidate_features, k=k)
+    idx = local_indices_by_similarity(train_features, candidate_features, k=k, norm_eps=norm_eps)
     local = residual[idx]
     local_var = local.var(axis=1, ddof=1 if local.shape[1] > 1 else 0).astype(np.float32)
     mixed = (1.0 - float(shrink)) * local_var + float(shrink) * global_var[None, :]
@@ -221,18 +232,25 @@ def shrink_layer_features(
     train_layers: Sequence[np.ndarray],
     test_layers: Sequence[np.ndarray],
     shrink: float = LAYER_FEATURE_SHRINK,
-    eps: float = EPS,
+    eps: float = NORM_EPS,
+    *,
+    norm_eps: float | None = None,
 ) -> tuple[list[np.ndarray], list[np.ndarray]]:
-    """Shrink each visual layer toward the per-image mean visual feature."""
+    """Shrink each visual layer toward the per-image mean visual feature.
+
+    ``eps`` remains a legacy name for the vector-normalization floor.  An
+    explicit ``norm_eps`` takes precedence; neither controls score tolerances.
+    """
 
     if len(train_layers) != len(test_layers) or not train_layers:
         raise ValueError("train_layers and test_layers must have the same non-zero length")
-    train_norm = [l2_normalize(x, eps) for x in train_layers]
-    test_norm = [l2_normalize(x, eps) for x in test_layers]
-    mean_train = l2_normalize(np.mean(train_norm, axis=0), eps)
-    mean_test = l2_normalize(np.mean(test_norm, axis=0), eps)
-    train_out = [l2_normalize((1.0 - float(shrink)) * x + float(shrink) * mean_train, eps) for x in train_norm]
-    test_out = [l2_normalize((1.0 - float(shrink)) * x + float(shrink) * mean_test, eps) for x in test_norm]
+    norm_eps = eps if norm_eps is None else norm_eps
+    train_norm = [l2_normalize(x, norm_eps) for x in train_layers]
+    test_norm = [l2_normalize(x, norm_eps) for x in test_layers]
+    mean_train = l2_normalize(np.mean(train_norm, axis=0), norm_eps)
+    mean_test = l2_normalize(np.mean(test_norm, axis=0), norm_eps)
+    train_out = [l2_normalize((1.0 - float(shrink)) * x + float(shrink) * mean_train, norm_eps) for x in train_norm]
+    test_out = [l2_normalize((1.0 - float(shrink)) * x + float(shrink) * mean_test, norm_eps) for x in test_norm]
     return train_out, test_out
 
 
@@ -266,23 +284,28 @@ def score_branch(
     layer_feature_shrink: float = LAYER_FEATURE_SHRINK,
     kappa: float = KAPPA,
     eps: float = EPS,
+    norm_eps: float = NORM_EPS,
 ) -> BranchScore:
     """Compute the complete score for one branch.
 
     ``train_*`` arrays are paired rows.  ``test_query[i]`` is assumed to have
     candidate ``i`` as its ground-truth image, which is the convention used by
     the released evaluation files; the function itself does not use labels.
+    ``eps`` controls variance, MSE, and score tolerances.  ``norm_eps`` controls
+    vector normalization throughout the branch, including neighbour selection.
     """
 
-    train_query = l2_normalize(train_query, eps)
-    test_query = l2_normalize(test_query, eps)
-    train_global = l2_normalize(train_global, eps)
-    test_global = l2_normalize(test_global, eps)
+    train_query = l2_normalize(train_query, norm_eps)
+    test_query = l2_normalize(test_query, norm_eps)
+    train_global = l2_normalize(train_global, norm_eps)
+    test_global = l2_normalize(test_global, norm_eps)
 
     global_weight = fit_ridge(train_global, train_query, ridge)
-    train_global_pred = l2_normalize(apply_ridge(train_global, global_weight), eps)
-    test_global_pred = l2_normalize(apply_ridge(test_global, global_weight), eps)
-    calibrated_global = loo_variance_calibrate(test_query, test_global_pred, variance_power, variance_clip, eps)
+    train_global_pred = l2_normalize(apply_ridge(train_global, global_weight), norm_eps)
+    test_global_pred = l2_normalize(apply_ridge(test_global, global_weight), norm_eps)
+    calibrated_global = loo_variance_calibrate(
+        test_query, test_global_pred, variance_power, variance_clip, eps, norm_eps=norm_eps
+    )
     global_var = candidate_local_variance(
         train_global,
         test_global,
@@ -291,19 +314,24 @@ def score_branch(
         local_k,
         local_shrink,
         eps,
+        norm_eps=norm_eps,
     )
     global_score = variance_weighted_residual_score(calibrated_global, test_global_pred, global_var)
     global_normalized = row_minmax(global_score, eps)
 
-    shrunk_train, shrunk_test = shrink_layer_features(train_layers, test_layers, layer_feature_shrink, eps)
+    shrunk_train, shrunk_test = shrink_layer_features(
+        train_layers, test_layers, layer_feature_shrink, norm_eps=norm_eps
+    )
     layer_predictions_train: list[np.ndarray] = []
     layer_predictions_test: list[np.ndarray] = []
     layer_scores: list[np.ndarray] = []
     for layer_train, layer_test in zip(shrunk_train, shrunk_test):
         weight = fit_ridge(layer_train, train_query, ridge)
-        pred_train = l2_normalize(apply_ridge(layer_train, weight), eps)
-        pred_test = l2_normalize(apply_ridge(layer_test, weight), eps)
-        calibrated_layer = loo_variance_calibrate(test_query, pred_test, variance_power, variance_clip, eps)
+        pred_train = l2_normalize(apply_ridge(layer_train, weight), norm_eps)
+        pred_test = l2_normalize(apply_ridge(layer_test, weight), norm_eps)
+        calibrated_layer = loo_variance_calibrate(
+            test_query, pred_test, variance_power, variance_clip, eps, norm_eps=norm_eps
+        )
         layer_scores.append(response_agreement_score(calibrated_layer, pred_test))
         layer_predictions_train.append(pred_train)
         layer_predictions_test.append(pred_test)
@@ -333,8 +361,15 @@ def fuse_branches(branch_scores: Mapping[str, BranchScore], gamma: float = GAMMA
         raise ValueError("at least one branch is required")
     ordered = list(branch_scores.values())
     global_part = np.mean([score.global_normalized for score in ordered], axis=0)
+    # Equalize each branch's layer-mixture range before averaging branches.
     layer_part = np.mean(
-        [np.sum(np.stack([w * s for w, s in zip(score.layer_weights, score.layer_normalized)]), axis=0) for score in ordered],
+        [
+            row_minmax(
+                np.sum(np.stack([w * s for w, s in zip(score.layer_weights, score.layer_normalized)]), axis=0),
+                eps,
+            )
+            for score in ordered
+        ],
         axis=0,
     )
     return ((1.0 - float(gamma)) * row_minmax(global_part, eps) + float(gamma) * row_minmax(layer_part, eps)).astype(np.float32)
