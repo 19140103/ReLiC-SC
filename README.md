@@ -2,7 +2,7 @@
 
 This repository contains the code used for **ReLiC-SC: Calibrated Response
 Modeling for Reliable Visual EEG Retrieval**. The release is organized into
-three parts:
+four parts:
 
 - `encoder/`: the cumulative-window, multi-layer EEG/image representation
   training code used to obtain the branch embeddings;
@@ -27,11 +27,14 @@ with:
 pip install -r requirements.txt
 ```
 
-The encoder package can also be installed in editable mode:
+For the `src/rapid_eeg` helper imports, install the repository in editable mode:
 
 ```bash
 pip install -e .
 ```
+
+Encoder entrypoints under `encoder/scripts/` resolve their sibling package
+directly and can be run from the repository root.
 
 ## Data sources and access
 
@@ -91,9 +94,25 @@ in the module docstring and match the equations in the manuscript.
 
 The scripts under `encoder/` implement the cumulative EEG-window and selected
 CLIP ViT-B/32 visual-layer representation training used in the manuscript.
-They expect the preprocessed THINGS-EEG2 layout described in the encoder README
-commands and do not download data implicitly. The training outputs are kept
+The Alljoined G/H presets include G's bottleneck visual adapter and H's learned
+stage-specific visual targets and auxiliary contrastive loss. The existing
+THINGS-EEG2 presets retain their original global-alignment behavior. See
+[`encoder/README.md`](encoder/README.md) for preparation, training, export, and
+scoring commands. Training does not download data implicitly, and outputs stay
 outside version control.
+
+## Lightweight verification
+
+With PyTorch, NumPy, Pandas, PyArrow and pytest installed, run:
+
+```bash
+python -m pytest -q
+```
+
+Tests cover the G/H adapters and weighted stage objective, a tiny CPU
+training/export/full-scoring path, data-bridge identity checks, and scoring
+regressions. These are implementation checks, not a rerun of the paper's
+20-participant/three-seed benchmark. No participant data are included in tests.
 
 ## Ethics and data handling
 

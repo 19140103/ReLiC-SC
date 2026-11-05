@@ -6,9 +6,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
-import open_clip
 import torch
-from open_clip.pretrained import download_pretrained, get_pretrained_cfg
 from PIL import Image
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
@@ -31,6 +29,8 @@ def resolve_pretrained(
     if pretrained is None or str(pretrained).lower() in {"", "none", "null"}:
         return None, preprocess_kwargs
     if prefer_openai_url:
+        from open_clip.pretrained import download_pretrained, get_pretrained_cfg
+
         cfg = get_pretrained_cfg(backbone, pretrained)
         if not cfg:
             raise RuntimeError(f"No pretrained config found for {backbone}/{pretrained}.")
@@ -215,6 +215,8 @@ def build_argparser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_argparser().parse_args()
+    import open_clip
+
     print("Input arguments:")
     for key, value in vars(args).items():
         print(f"{key:32} {value}")

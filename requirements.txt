@@ -4,5 +4,6 @@ torchvision==0.21.0+cu126
 open_clip_torch==2.31.0
 numpy>=2.0.0
 pandas==2.2.3
+pyarrow>=14.0.0
 pillow>=10.0.0
 tqdm==4.67.1

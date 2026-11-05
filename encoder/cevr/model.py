@@ -150,6 +150,14 @@ class CEVRModel(nn.Module):
 
 
 class MultiLevelVisualProjector(nn.Module):
+    """Global visual target, with optional G adapter and H stage supervision.
+
+    Stage targets mix the *raw* visual layers before the shared stage
+    projection. They are separate from the projected layers used by the
+    global target. Returned targets are unnormalized; the contrastive loss
+    applies normalization to both sides.
+    """
+
     def __init__(
         self,
         image_dim: int = 512,
@@ -158,6 +166,14 @@ class MultiLevelVisualProjector(nn.Module):
         fusion_indices: list[int] | None = None,
         parameter_matched_heads: bool = True,
         num_relations: int = 5,
+        current_target_adapter: str = "linear",
+        current_target_bottleneck_dim: int = 128,
+        current_target_dropout: float = 0.0,
+        num_eeg_levels: int | None = None,
+        stage_calibration_mode: str = "none",
+        stage_calibration_temperature: float = 1.0,
+        stage_calibration_init_indices: list[int] | None = None,
+        stage_calibration_init_strength: float = 0.0,
     ):
         super().__init__()
         if num_layers < 1:
@@ -165,22 +181,63 @@ class MultiLevelVisualProjector(nn.Module):
         self.image_dim = int(image_dim)
         self.embed_dim = int(embed_dim)
         self.num_layers = int(num_layers)
+        self.current_target_adapter = str(current_target_adapter)
+        if self.current_target_adapter not in {"linear", "bottleneck"}:
+            raise ValueError(f"Unknown current_target_adapter: {self.current_target_adapter}")
+        self.current_target_bottleneck_dim = int(current_target_bottleneck_dim)
+        if self.current_target_bottleneck_dim < 1:
+            raise ValueError("current_target_bottleneck_dim must be positive.")
+        self.current_target_dropout = float(current_target_dropout)
+        if not 0.0 <= self.current_target_dropout <= 1.0:
+            raise ValueError("current_target_dropout must be between 0 and 1.")
+        self.num_eeg_levels = self.num_layers if num_eeg_levels is None else int(num_eeg_levels)
+        if self.num_eeg_levels < 1:
+            raise ValueError("num_eeg_levels must be positive.")
+        self.stage_calibration_mode = str(stage_calibration_mode)
+        if self.stage_calibration_mode not in {"none", "stage_scalar"}:
+            raise ValueError(f"Unknown stage_calibration_mode: {self.stage_calibration_mode}")
+        self.stage_calibration_temperature = float(stage_calibration_temperature)
+        if not math.isfinite(self.stage_calibration_temperature) or self.stage_calibration_temperature <= 0.0:
+            raise ValueError("stage_calibration_temperature must be finite and positive.")
         self.fusion_indices = list(range(num_layers)) if fusion_indices is None else [int(x) for x in fusion_indices]
+        if not self.fusion_indices:
+            raise ValueError("At least one visual fusion index is required.")
         for index in self.fusion_indices:
             if index < 0 or index >= num_layers:
                 raise ValueError(f"Visual fusion index {index} is out of range for {num_layers} layers.")
         self.level_projectors = nn.ModuleList([nn.Linear(image_dim, embed_dim) for _ in range(num_layers)])
-        self.current_fusion_projector = nn.Linear(embed_dim, embed_dim)
-        if parameter_matched_heads:
+        if self.current_target_adapter == "linear":
+            self.current_fusion_projector = nn.Linear(embed_dim, embed_dim)
+        else:
+            self.current_fusion_projector = nn.Sequential(
+                nn.Linear(embed_dim, self.current_target_bottleneck_dim),
+                nn.GELU(),
+                nn.Dropout(self.current_target_dropout),
+                nn.Linear(self.current_target_bottleneck_dim, embed_dim),
+            )
+        if parameter_matched_heads or self.stage_calibration_mode != "none":
             self.stage_calibration_projector = nn.Linear(image_dim, embed_dim)
-            self.relation_level_logits = nn.Parameter(torch.zeros(num_relations, num_layers))
         else:
             self.stage_calibration_projector = None
+        if parameter_matched_heads:
+            self.relation_level_logits = nn.Parameter(torch.zeros(num_relations, num_layers))
+        else:
             self.register_parameter("relation_level_logits", None)
+        if self.stage_calibration_mode == "stage_scalar":
+            self.stage_calibration_logits = nn.Parameter(torch.zeros(self.num_eeg_levels, self.num_layers))
+            with torch.no_grad():
+                for stage, layer in enumerate((stage_calibration_init_indices or [])[: self.num_eeg_levels]):
+                    if not 0 <= int(layer) < self.num_layers:
+                        raise ValueError(f"Stage calibration index {layer} is out of range for {self.num_layers} layers.")
+                    self.stage_calibration_logits[stage, int(layer)] = float(stage_calibration_init_strength)
+        else:
+            self.register_parameter("stage_calibration_logits", None)
 
     def project_layers(self, visual_features: torch.Tensor) -> torch.Tensor:
         if visual_features.ndim != 3:
             raise ValueError(f"Expected multi-level visual feature shape (B,L,D), got {tuple(visual_features.shape)}.")
+        if visual_features.shape[1:] != (self.num_layers, self.image_dim):
+            raise ValueError(f"Expected {self.num_layers} visual layers of dimension {self.image_dim}, got {tuple(visual_features.shape)}.")
         return torch.stack(
             [projector(visual_features[:, idx, :]) for idx, projector in enumerate(self.level_projectors)],
             dim=1,
@@ -191,6 +248,26 @@ class MultiLevelVisualProjector(nn.Module):
         indices = torch.tensor(self.fusion_indices, device=projected.device, dtype=torch.long)
         fused = projected.index_select(1, indices).mean(dim=1)
         return self.current_fusion_projector(fused), projected
+
+    def calibrate_stage_targets(
+        self, visual_features: torch.Tensor
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+        """Return H's raw-layer mixture targets and learned stage/layer weights."""
+        if self.stage_calibration_mode == "none":
+            return None, None
+        if visual_features.ndim != 3 or visual_features.shape[1:] != (self.num_layers, self.image_dim):
+            raise ValueError(
+                f"Expected multi-level visual features (B,{self.num_layers},{self.image_dim}), "
+                f"got {tuple(visual_features.shape)}."
+            )
+        assert self.stage_calibration_logits is not None
+        assert self.stage_calibration_projector is not None
+        temperature = max(self.stage_calibration_temperature, 1e-6)
+        weights = F.softmax(self.stage_calibration_logits / temperature, dim=1).to(
+            device=visual_features.device, dtype=visual_features.dtype
+        )
+        mixed = torch.einsum("tl,bld->btd", weights, visual_features)
+        return self.stage_calibration_projector(mixed), weights
 
     @torch.no_grad()
     def encode_numpy(self, visual_features: torch.Tensor | "np.ndarray", device: torch.device, batch_size: int = 1024):

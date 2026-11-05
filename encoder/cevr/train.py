@@ -48,11 +48,56 @@ def resolve_visual_dirs(config: dict[str, Any]) -> list[str]:
 
 
 def contrastive_loss(pred: torch.Tensor, target: torch.Tensor, temperature: float) -> torch.Tensor:
+    if temperature <= 0:
+        raise ValueError("Contrastive temperature must be positive.")
     pred = F.normalize(pred, dim=-1)
     target = F.normalize(target, dim=-1)
     logits = pred @ target.T / temperature
     labels = torch.arange(logits.shape[0], device=logits.device)
     return 0.5 * (F.cross_entropy(logits, labels) + F.cross_entropy(logits.T, labels))
+
+
+def stage_level_alignment_loss(
+    level_outputs: list[torch.Tensor],
+    stage_targets: torch.Tensor,
+    level_weights: torch.Tensor,
+    temperature: float,
+) -> torch.Tensor:
+    """H auxiliary loss: normalized weighted mean of stage contrastive losses."""
+    if not level_outputs or stage_targets.shape[1] != len(level_outputs):
+        raise ValueError("One visual target is required for each EEG stage.")
+    if level_weights.ndim != 1 or level_weights.numel() != len(level_outputs):
+        raise ValueError("hier_level_weights must match the EEG window count.")
+    if not torch.isfinite(level_weights).all() or (level_weights < 0).any() or level_weights.sum() <= 0:
+        raise ValueError("Stage weights must be finite, non-negative, and have a positive sum.")
+    terms = torch.stack([
+        contrastive_loss(pred, stage_targets[:, idx, :], temperature)
+        for idx, pred in enumerate(level_outputs)
+    ])
+    weights = level_weights.to(device=terms.device, dtype=terms.dtype)
+    return (terms * (weights / weights.sum().clamp_min(1e-8))).sum()
+
+
+def representation_loss(
+    eeg_output: dict[str, Any],
+    visual_features: torch.Tensor,
+    visual_projector: MultiLevelVisualProjector,
+    temperature: float,
+    hier_loss_weight: float,
+    level_weights: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """G uses global alignment; H adds stage supervision only during training."""
+    visual_target, _ = visual_projector(visual_features)
+    global_loss = contrastive_loss(eeg_output["current"], visual_target, temperature)
+    stage_loss = global_loss.new_zeros(())
+    if hier_loss_weight > 0:
+        stage_targets, _ = visual_projector.calibrate_stage_targets(visual_features)
+        if stage_targets is None:
+            raise ValueError("Positive hier_loss_weight requires stage_calibration_mode='stage_scalar'.")
+        stage_loss = stage_level_alignment_loss(
+            eeg_output["window_outputs"], stage_targets, level_weights, temperature,
+        )
+    return global_loss + hier_loss_weight * stage_loss, global_loss, stage_loss
 
 
 def retrieval_metrics(pred: np.ndarray, target: np.ndarray) -> dict[str, float]:
@@ -113,6 +158,17 @@ def train(config: dict[str, Any]) -> dict[str, Any]:
     model_cfg = config["model"]
     train_cfg = config["train"]
 
+    epochs = int(train_cfg.get("epochs", 50))
+    batch_size = int(train_cfg.get("batch_size", 1024))
+    hier_loss_weight = float(train_cfg.get("hier_loss_weight", 0.0))
+    if epochs < 1 or batch_size < 2:
+        raise ValueError("epochs must be positive and contrastive batch_size must be at least two.")
+    if not np.isfinite(hier_loss_weight) or hier_loss_weight < 0:
+        raise ValueError("hier_loss_weight must be finite and non-negative.")
+    stage_mode = str(model_cfg.get("stage_calibration_mode", "none"))
+    if (hier_loss_weight > 0) != (stage_mode != "none"):
+        raise ValueError("Enable stage_scalar and a positive hier_loss_weight together for H.")
+
     seed = int(run_cfg.get("seed", 20260815))
     seed_everything(seed)
     device = torch.device("cuda" if torch.cuda.is_available() and not bool(run_cfg.get("cpu", False)) else "cpu")
@@ -120,6 +176,8 @@ def train(config: dict[str, Any]) -> dict[str, Any]:
     subject = str(run_cfg["subject"])
     run_name = str(run_cfg.get("run_name", "cevr"))
     output_dir = Path(run_cfg.get("output_dir", "results")) / subject / run_name / f"seed-{seed}"
+    if (output_dir / "final_checkpoint.pt").exists():
+        raise FileExistsError(f"Completed run already exists; choose a new output directory: {output_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)
     write_json(output_dir / "config.json", config)
 
@@ -142,7 +200,8 @@ def train(config: dict[str, Any]) -> dict[str, Any]:
     train_ds = PairDataset(train_eeg, train_visual, train_keys)
     test_ds = PairDataset(test_eeg, test_visual, test_keys)
 
-    batch_size = int(train_cfg.get("batch_size", 1024))
+    if len(train_ds) < batch_size:
+        raise ValueError("Training data contain fewer rows than batch_size; drop_last would skip all updates.")
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, drop_last=True, num_workers=0)
 
     model = CEVRModel(
@@ -164,7 +223,23 @@ def train(config: dict[str, Any]) -> dict[str, Any]:
         fusion_indices=list(range(int(image_train_features.shape[0]))),
         parameter_matched_heads=bool(model_cfg.get("parameter_matched_heads", True)),
         num_relations=int(model_cfg.get("num_slots", 5)),
+        current_target_adapter=str(model_cfg.get("current_target_adapter", "linear")),
+        current_target_bottleneck_dim=int(model_cfg.get("current_target_bottleneck_dim", 128)),
+        current_target_dropout=float(model_cfg.get("current_target_dropout", 0.0)),
+        num_eeg_levels=len(model.window_ends),
+        stage_calibration_mode=stage_mode,
+        stage_calibration_temperature=float(model_cfg.get("stage_calibration_temperature", 1.0)),
+        stage_calibration_init_indices=model_cfg.get("stage_calibration_init_indices"),
+        stage_calibration_init_strength=float(model_cfg.get("stage_calibration_init_strength", 0.0)),
     ).to(device)
+    level_weights = torch.as_tensor(
+        train_cfg.get("hier_level_weights", list(range(1, len(model.window_ends) + 1))),
+        device=device, dtype=torch.float32,
+    )
+    if (level_weights.ndim != 1 or level_weights.numel() != len(model.window_ends)
+            or not torch.isfinite(level_weights).all() or (level_weights < 0).any()
+            or level_weights.sum() <= 0):
+        raise ValueError("hier_level_weights must be valid non-negative weights for every EEG window.")
 
     optimizer = torch.optim.AdamW(
         list(model.parameters()) + list(visual_projector.parameters()),
@@ -195,6 +270,10 @@ def train(config: dict[str, Any]) -> dict[str, Any]:
         "final_checkpoint_protocol": True,
         "parameter_matched_heads": bool(model_cfg.get("parameter_matched_heads", True)),
         "current_slot_weight": float(model_cfg.get("current_slot_weight", 0.0)),
+        "current_target_adapter": visual_projector.current_target_adapter,
+        "stage_calibration_mode": stage_mode,
+        "hier_loss_weight": hier_loss_weight,
+        "hier_level_weights": level_weights.detach().cpu().tolist(),
         **count_parameters(model, visual_projector),
     }
     if bool(run_cfg.get("dry_run", False)):
@@ -206,7 +285,6 @@ def train(config: dict[str, Any]) -> dict[str, Any]:
     best_top5_at_top1 = 0.0
     best_epoch = 0
     start_time = time.time()
-    epochs = int(train_cfg.get("epochs", 50))
     eval_every = int(train_cfg.get("eval_every", 5))
     log_every = int(train_cfg.get("log_every", 5))
     temperature = float(train_cfg.get("temperature", 0.07))
@@ -215,19 +293,24 @@ def train(config: dict[str, Any]) -> dict[str, Any]:
         model.train()
         visual_projector.train()
         total_loss = 0.0
+        total_global_loss = 0.0
+        total_stage_loss = 0.0
         batches = 0
         for eeg_batch, visual_features, _group in train_loader:
             eeg_batch = eeg_batch.to(device)
             visual_features = visual_features.to(device)
-            eeg_output = model(eeg_batch)["current"]
-            visual_target, _projected = visual_projector(visual_features)
-            loss = contrastive_loss(eeg_output, visual_target, temperature)
+            loss, global_loss, stage_loss = representation_loss(
+                model(eeg_batch), visual_features, visual_projector,
+                temperature, hier_loss_weight, level_weights,
+            )
 
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             optimizer.step()
 
             total_loss += float(loss.detach().cpu())
+            total_global_loss += float(global_loss.detach().cpu())
+            total_stage_loss += float(stage_loss.detach().cpu())
             batches += 1
 
         if scheduler is not None:
@@ -237,6 +320,8 @@ def train(config: dict[str, Any]) -> dict[str, Any]:
             "epoch": epoch,
             "lr": float(optimizer.param_groups[0]["lr"]),
             "train_loss": total_loss / max(batches, 1),
+            "global_loss": total_global_loss / max(batches, 1),
+            "stage_loss": total_stage_loss / max(batches, 1),
         }
         if epoch == 1 or epoch % eval_every == 0 or epoch == epochs:
             pred = predict(model, test_ds, device, batch_size)
@@ -335,7 +420,7 @@ def config_from_args(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def build_argparser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Train the ReLiC-SC encoder for one THINGS-EEG subject.")
+    parser = argparse.ArgumentParser(description="Train a ReLiC-SC branch on prepared THINGS-EEG2 or Alljoined data.")
     parser.add_argument("--config", required=True, help="Path to a JSON config file.")
     parser.add_argument("--subject", default=None, help="Subject id, e.g. sub-01.")
     parser.add_argument("--run-name", default=None)
