@@ -1,23 +1,33 @@
-# G/H release validation
+# Tests and validation
 
-Checked on 2026-11-05. This is an implementation-completeness check for the
-Alljoined G/H training and scoring path, not a rerun of the manuscript results.
+## Automated tests
 
-## Included paths
+Run the test suite from the repository root after installing the dependencies
+and pytest:
+
+```bash
+python -B -m pytest -q -p no:cacheprovider
+```
+
+All 51 tests pass with Python 3.11.8 and PyTorch 2.5.1 on CPU. The tests use
+synthetic data and cover:
 
 - G bottleneck global visual adapter.
 - H learned stage/layer mixture of raw CLIP features, shared stage projection,
   and normalized stage-weighted auxiliary loss (weight 0.2).
-- Portable Alljoined G/H configuration files, final-epoch training and raw
-  train/test embedding export for both scoring programs.
-- Image-ID-indexed CLIP depth cache extraction and retained-repeat mean EEG
-  preparation, with split/identity checks and conflict protection.
-- Legacy global-only encoder behavior and existing scoring/normalization fixes.
+- Alljoined G/H configuration loading, final-epoch training, raw train/test
+  embedding export, and full scoring with branch fusion.
+- CLIP depth-cache identity, repeat-averaged EEG preparation, split separation,
+  and output-conflict protection.
+- Global-only encoder behavior and scoring/normalization regressions.
 
-## Checks performed
+These checks validate software behavior and numerical consistency; they are
+separate from full-dataset accuracy, multi-seed, and GPU training benchmarks.
 
-- `python -B -m pytest -q -p no:cacheprovider`: 51 tests passed in the local
-  Python 3.11.8 / PyTorch 2.5.1 CPU test environment. Tests use synthetic data.
+## Numerical and integration checks
+
+The following checks were completed on 5 November 2026:
+
 - G/H visual forward outputs compared with the archived implementation under
   the same weights: exact equality, including H stage targets and weights.
 - Each tiny branch trained for one epoch, with 8 training and 4 test images;
@@ -25,17 +35,10 @@ Alljoined G/H training and scoring path, not a rerun of the manuscript results.
   Both exports then passed through the full scorer and branch fusion.
 - Actual CLIP cache CLI checked on two synthetic images with the official local
   ViT-B/32 checkpoint, using Python 3.12.7, OpenCLIP 2.31.0, PyTorch 2.6.0 and CPU.
-  Its SHA-256 matched the OpenAI checkpoint metadata:
+  The checkpoint SHA-256 matched the OpenAI metadata:
   `40d365715913c9da98579312b702a82c18be219cc2a73407c4526f58eba950af`.
   Output: `[2,8,512]`, finite float16 values, no L2 normalization.
-- No raw EEG, participant data, model weights, generated caches or run outputs
-  are included in the release. Existing source attribution is retained.
 
-## Not claimed
-
-No full-dataset accuracy reproduction, multi-seed rerun or GPU training benchmark
-was performed for this release. The mean-only data route does not implement the
-single-trial/repetition-budget supplementary analyses. Removing unused historic
-training branches can change random-number consumption; matching a seed is not
-a guarantee of bitwise-identical historical training. The data providers' access
-and license conditions continue to apply independently of this code's license.
+The [encoder documentation](../encoder/README.md) describes input preparation
+and random-seed behavior. Dataset access and licensing are described in the
+[main README](../README.md#data-sources-and-access).

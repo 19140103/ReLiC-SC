@@ -1,8 +1,11 @@
 # ReLiC-SC
 
-This repository contains the code used for **ReLiC-SC: Calibrated Response
-Modeling for Reliable Visual EEG Retrieval**. The release is organized into
-four parts:
+This repository provides the implementation accompanying **ReLiC-SC: Calibrated
+Response Modeling for Reliable Visual EEG Retrieval**.
+
+The versioned code release is
+[v0.1.0](https://github.com/19140103/ReLiC-SC/releases/tag/v0.1.0).
+The repository is organized into four parts:
 
 - `encoder/`: the cumulative-window, multi-layer EEG/image representation
   training code used to obtain the branch embeddings;
@@ -101,27 +104,31 @@ THINGS-EEG2 presets retain their original global-alignment behavior. See
 scoring commands. Training does not download data implicitly, and outputs stay
 outside version control.
 
-## Lightweight verification
+## Tests
 
-With PyTorch, NumPy, Pandas, PyArrow and pytest installed, run:
+After installing the dependencies, install pytest and run:
 
 ```bash
+python -m pip install pytest
 python -m pytest -q
 ```
 
-Tests cover the G/H adapters and weighted stage objective, a tiny CPU
-training/export/full-scoring path, data-bridge identity checks, and scoring
-regressions. These are implementation checks, not a rerun of the paper's
-20-participant/three-seed benchmark. No participant data are included in tests.
+The synthetic-data tests cover the G/H adapters and weighted stage objective,
+CPU training/export/scoring, data identity, and scoring regressions. See
+[Tests and validation](docs/gh_release_validation.md) for coverage and the test
+environment.
 
 ## Ethics and data handling
 
 The paper reports a secondary analysis of de-identified public EEG data. No new
 participants were recruited and no new recordings were collected for this
 release. Ethical approval and informed consent for the original recordings are
-the responsibility of the dataset providers. Do not commit raw EEG, subject
-questionnaires, or any other participant-level files to this repository.
+the responsibility of the dataset providers.
 
 ## License
 
-The code in this repository is released under the MIT License in LICENSE. The encoder/cevr and src/rapid_eeg paths contain pre-existing encoder components retained for compatibility. Their provenance and applicable copyright information are documented in the source files and LICENSE. This code license does not change the licenses or access terms of THINGS-EEG2, Alljoined-1.6M, CLIP, or any other external resource.
+The code is released under the [MIT License](LICENSE). The `encoder/cevr` and
+`src/rapid_eeg` paths contain pre-existing encoder components retained for
+compatibility; source attribution is preserved in the source files and LICENSE.
+The licenses and access terms of THINGS-EEG2, Alljoined-1.6M, CLIP, and other
+external resources apply separately.

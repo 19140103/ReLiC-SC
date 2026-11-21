@@ -1,4 +1,4 @@
-# Encoder release
+# Representation learning
 
 This directory contains the representation-learning component used before
 ReLiC-SC scoring. The default configuration uses cumulative EEG windows and
@@ -90,12 +90,12 @@ python scripts/data/prepare_encoder_data.py \
 ```
 
 The bridge checks image identity, split separation, row order, channel/time
-metadata and shared visual-bank consistency. It averages the actually retained
-repetitions for each image; it does not pad or invent missing trials. The saved
-`[objects,images,1,channels,time]` arrays have one **averaged** slot, not one
-original trial. This route does not reproduce single-trial or repetition-budget
-analyses. Repeat counts and image-key manifests accompany the prepared inputs.
-Conflicting existing outputs are rejected.
+metadata and shared visual-bank consistency. It averages the retained
+repetitions for each image without padding. The saved
+`[objects,images,1,channels,time]` arrays contain one **repeat-averaged** slot per
+image. This preparation route covers repeat-averaged retrieval, not single-trial
+or repetition-budget analyses. Repeat counts and image-key manifests accompany
+the prepared inputs. Conflicting existing outputs are rejected.
 
 ### Train, export, score
 
@@ -134,18 +134,15 @@ embedding. `train_test_embeddings.npz` contains raw float32 `train_pred`,
 vectors at consumption. Test data are used for diagnostics/export, not the
 training objective or EEG standardization.
 
-## Provenance and verification boundary
+## Implementation notes
 
 The G/H adapter and stage-target equations are ported from the existing
 CEVR-derived training implementation; source attribution is retained in the
-root LICENSE. Presets preserve the effective model/objective and recorded
-training settings. Unused auxiliary branches and historical machine paths are
-not carried over. Consequently a seed alone does not promise bit-for-bit
-identity with historical training runs (initialization/dropout RNG consumption
-may differ).
+root LICENSE. Presets preserve the model, objective, and recorded training
+settings. The portable implementation omits unused auxiliary branches and
+machine-specific paths. Omitting these branches can change initialization and
+dropout random-number consumption, so the same seed can produce different
+outputs from historical runs.
 
-Lightweight tests use synthetic data, small dimensions and one epoch. They
-verify forward/gradient behavior, normalized stage weights, train/export/score
-connectivity and data identity; they do not establish the paper's reported
-accuracy. Full-dataset training and benchmark reproduction remain separate
-operations requiring the original licensed data and computational resources.
+See [Tests and validation](../docs/gh_release_validation.md) for automated test
+coverage and numerical checks against the original implementation.
